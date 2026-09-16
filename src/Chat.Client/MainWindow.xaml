@@ -1,0 +1,504 @@
+<Window x:Class="Chat.Client.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:Chat.Client"
+        Title="Lab1 Chat • WPF Client"
+        Width="1120"
+        Height="760"
+        MinWidth="920"
+        MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource PageBrush}"
+        FontFamily="Segoe UI"
+        Foreground="{StaticResource InkBrush}"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Closing="Window_Closing">
+    <Window.Resources>
+        <DataTemplate x:Key="OwnMessageTemplate">
+            <Grid Margin="0,4,0,4">
+                <Border HorizontalAlignment="Right"
+                        MaxWidth="650"
+                        Padding="14,10,14,8"
+                        Background="{StaticResource NavyBrush}"
+                        CornerRadius="14,14,3,14">
+                    <StackPanel>
+                        <TextBlock Text="Bạn"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="#A7E6E3"
+                                   Margin="0,0,0,4" />
+                        <TextBlock Text="{Binding Text}"
+                                   FontSize="14"
+                                   LineHeight="20"
+                                   TextWrapping="Wrap"
+                                   Foreground="White" />
+                        <TextBlock Text="{Binding TimeText}"
+                                   FontSize="10"
+                                   HorizontalAlignment="Right"
+                                   Foreground="#A8BAD1"
+                                   Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="OtherMessageTemplate">
+            <Grid Margin="0,4,0,4">
+                <Border HorizontalAlignment="Left"
+                        MaxWidth="650"
+                        Padding="14,10,14,8"
+                        Background="#EDF2F8"
+                        CornerRadius="14,14,14,3">
+                    <StackPanel>
+                        <TextBlock Text="{Binding SenderText}"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TealDarkBrush}"
+                                   Margin="0,0,0,4" />
+                        <TextBlock Text="{Binding Text}"
+                                   FontSize="14"
+                                   LineHeight="20"
+                                   TextWrapping="Wrap"
+                                   Foreground="{StaticResource InkBrush}" />
+                        <TextBlock Text="{Binding TimeText}"
+                                   FontSize="10"
+                                   HorizontalAlignment="Right"
+                                   Foreground="{StaticResource MutedInkBrush}"
+                                   Margin="0,6,0,0" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SystemMessageTemplate">
+            <Grid Margin="0,8,0,8">
+                <StackPanel HorizontalAlignment="Center" MaxWidth="670">
+                    <TextBlock Text="{Binding Text}"
+                               FontSize="12"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               Foreground="{StaticResource MutedInkBrush}" />
+                    <TextBlock Text="{Binding TimeText}"
+                               FontSize="10"
+                               TextAlignment="Center"
+                               Foreground="#A2ACBA"
+                               Margin="0,3,0,0" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <local:ChatMessageTemplateSelector x:Key="MessageTemplateSelector"
+                                           OwnTemplate="{StaticResource OwnMessageTemplate}"
+                                           OtherTemplate="{StaticResource OtherMessageTemplate}"
+                                           SystemTemplate="{StaticResource SystemMessageTemplate}" />
+    </Window.Resources>
+
+    <Grid Background="{StaticResource PageBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="94" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="31" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" Background="{StaticResource NavyBrush}" Padding="28,17">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Width="52"
+                            Height="52"
+                            CornerRadius="16"
+                            Background="#29466F"
+                            Margin="0,0,15,0">
+                        <TextBlock Text="✦"
+                                   FontSize="27"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="#7DE0DA" />
+                    </Border>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="LAB1 CHAT"
+                                   FontSize="23"
+                                   FontWeight="Bold"
+                                   Foreground="White" />
+                        <TextBlock Text="WPF client • trò chuyện thời gian thực"
+                                   FontSize="12"
+                                   Foreground="#AFC1D8"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                </StackPanel>
+
+                <Border HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Background="#203A62"
+                        CornerRadius="18"
+                        Padding="13,8">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="ConnectionDot"
+                                 Width="9"
+                                 Height="9"
+                                 Fill="#9AAAC0"
+                                 Margin="0,0,8,0"
+                                 VerticalAlignment="Center" />
+                        <TextBlock x:Name="ConnectionStatusText"
+                                   Text="Chưa kết nối"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="#D7E1EE"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Main content -->
+        <Grid Grid.Row="1" Margin="24,20,24,18">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="292" />
+                <ColumnDefinition Width="20" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Connection and members card -->
+            <Border Grid.Column="0"
+                    Background="{StaticResource CardBrush}"
+                    CornerRadius="14"
+                    Padding="20">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Text="KẾT NỐI PHÒNG CHAT"
+                               FontSize="11"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource TealDarkBrush}"
+                               Margin="0,0,0,14" />
+
+                    <TextBlock Grid.Row="1" Text="Địa chỉ máy chủ" Style="{StaticResource CaptionStyle}" />
+                    <TextBox Grid.Row="2"
+                             x:Name="HostInput"
+                             Text="127.0.0.1"
+                             Style="{StaticResource FieldStyle}"
+                             TabIndex="0"
+                             AutomationProperties.Name="Địa chỉ máy chủ"
+                             ToolTip="Tên máy hoặc địa chỉ IP của server" />
+
+                    <Grid Grid.Row="3" Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="94" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Tên thành viên" Style="{StaticResource CaptionStyle}" />
+                        <TextBlock Grid.Column="2" Text="Cổng" Style="{StaticResource CaptionStyle}" />
+                    </Grid>
+                    <Grid Grid.Row="4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="94" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0"
+                                 x:Name="UsernameInput"
+                                 Style="{StaticResource FieldStyle}"
+                                 MaxLength="24"
+                                 TabIndex="1"
+                                 AutomationProperties.Name="Tên thành viên"
+                                 ToolTip="Tên hiển thị của bạn trong phòng" />
+                        <TextBox Grid.Column="2"
+                                 x:Name="PortInput"
+                                 Text="5000"
+                                 Style="{StaticResource FieldStyle}"
+                                 MaxLength="5"
+                                 TabIndex="2"
+                                 AutomationProperties.Name="Cổng máy chủ"
+                                 ToolTip="Cổng mặc định là 5000" />
+                    </Grid>
+                    <TextBlock Grid.Row="5" x:Name="ValidationText" TextWrapping="Wrap" Foreground="{StaticResource DangerBrush}" FontSize="11" Margin="0,8,0,0" Visibility="Collapsed" />
+
+                    <Button Grid.Row="6"
+                            x:Name="ConnectButton"
+                            Content="Kết nối"
+                            Margin="0,14,0,0"
+                            Click="ConnectButton_Click"
+                            Style="{StaticResource PrimaryButtonStyle}"
+                            TabIndex="3"
+                            AutomationProperties.Name="Kết nối với server"
+                            ToolTip="Kết nối hoặc kết nối lại với phòng chat" />
+
+                    <Grid Grid.Row="7" Margin="0,23,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="THÀNH VIÊN TRỰC TUYẾN"
+                                       FontSize="11"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource TealDarkBrush}" />
+                            <Border Grid.Column="1"
+                                    Background="{StaticResource SoftTealBrush}"
+                                    CornerRadius="10"
+                                    Padding="8,3">
+                                <TextBlock x:Name="MemberCountText"
+                                           Text="0"
+                                           FontSize="11"
+                                           FontWeight="Bold"
+                                           Foreground="{StaticResource TealDarkBrush}" />
+                            </Border>
+                        </Grid>
+                        <ListBox Grid.Row="1"
+                                 x:Name="UsersList"
+                                 ItemsSource="{Binding OnlineUsers}"
+                                 BorderThickness="0"
+                                 Background="Transparent"
+                                 Padding="0"
+                                 TabIndex="4"
+                                 AutomationProperties.Name="Danh sách thành viên trực tuyến"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="8,7" />
+                                    <Setter Property="Margin" Value="0,1" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="UserItemBorder"
+                                                        Background="Transparent"
+                                                        CornerRadius="8"
+                                                        Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter />
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="UserItemBorder" Property="Background" Value="#F2F6FA" />
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="UserItemBorder" Property="Background" Value="{StaticResource SoftTealBrush}" />
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Width="8" Height="8" Fill="#20B486" Margin="0,0,9,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding}"
+                                                   TextWrapping="Wrap"
+                                                   MaxWidth="220"
+                                                   ToolTip="{Binding}"
+                                                   FontSize="13"
+                                                   Foreground="{StaticResource InkBrush}"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+
+                    <StackPanel Grid.Row="8" Margin="0,15,0,0">
+                        <Separator Background="{StaticResource BorderBrush}" Height="1" />
+                        <TextBlock x:Name="ConnectionHintText"
+                                   Text="Nhập thông tin rồi kết nối để bắt đầu."
+                                   TextWrapping="Wrap"
+                                   FontSize="11"
+                                   Foreground="{StaticResource MutedInkBrush}"
+                                   Margin="0,12,0,0" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Conversation card -->
+            <Border Grid.Column="2"
+                    Background="{StaticResource CardBrush}"
+                    CornerRadius="14">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="65" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="149" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="22,0">
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="PHÒNG CHUNG"
+                                       FontSize="11"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource TealDarkBrush}" />
+                            <TextBlock Text="Mọi người đang ở đây"
+                                       FontSize="12"
+                                       Foreground="{StaticResource MutedInkBrush}"
+                                       Margin="0,3,0,0" />
+                        </StackPanel>
+                        <TextBlock x:Name="MessageCountText"
+                                   HorizontalAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   FontSize="11"
+                                   Foreground="{StaticResource MutedInkBrush}" />
+                    </Grid>
+
+                    <Grid Grid.Row="1" Background="#FCFDFE">
+                        <ScrollViewer x:Name="MessagesScrollViewer"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      Padding="22,12"
+                                      ScrollChanged="MessagesScrollViewer_ScrollChanged">
+                            <ItemsControl x:Name="MessagesItems"
+                                          ItemsSource="{Binding Messages}"
+                                          ItemTemplateSelector="{StaticResource MessageTemplateSelector}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                            </ItemsControl>
+                        </ScrollViewer>
+
+                        <Border x:Name="EmptyStatePanel"
+                                Width="330"
+                                Padding="25,24"
+                                Background="White"
+                                BorderBrush="#E6ECF3"
+                                BorderThickness="1"
+                                CornerRadius="15"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                IsHitTestVisible="False">
+                            <StackPanel>
+                                <Border Width="46" Height="46" CornerRadius="14" Background="{StaticResource SoftTealBrush}" HorizontalAlignment="Center">
+                                    <TextBlock Text="💬" FontSize="23" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <TextBlock x:Name="EmptyStateTitle"
+                                           Text="Chưa có tin nhắn"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           TextAlignment="Center"
+                                           Foreground="{StaticResource InkBrush}"
+                                           Margin="0,14,0,5" />
+                                <TextBlock x:Name="EmptyStateDescription"
+                                           Text="Kết nối với server để bắt đầu cuộc trò chuyện."
+                                           FontSize="12"
+                                           TextWrapping="Wrap"
+                                           TextAlignment="Center"
+                                           Foreground="{StaticResource MutedInkBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Border Grid.Row="2"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="0,1,0,0"
+                            Padding="18,13,18,10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0"
+                                       Text="TIN NHẮN"
+                                       FontSize="11"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource TealDarkBrush}" />
+                            <Grid Grid.Row="1" Margin="0,7,0,0">
+                                <TextBox x:Name="MessageInput"
+                                         AcceptsReturn="True"
+                                         TextWrapping="Wrap"
+                                         VerticalContentAlignment="Top"
+                                         VerticalScrollBarVisibility="Auto"
+                                         HorizontalScrollBarVisibility="Disabled"
+                                         Padding="12,9,168,9"
+                                         FontSize="14"
+                                         Foreground="{StaticResource InkBrush}"
+                                         Background="#FAFBFD"
+                                         BorderBrush="{StaticResource BorderBrush}"
+                                         BorderThickness="1"
+                                         MaxLength="2000"
+                                         PreviewKeyDown="MessageInput_KeyDown"
+                                         TextChanged="MessageInput_TextChanged"
+                                         TabIndex="5"
+                                         AutomationProperties.Name="Nội dung tin nhắn"
+                                         ToolTip="Enter để gửi • Shift+Enter để xuống dòng" />
+                                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal" Margin="0,0,8,7">
+                                    <Button x:Name="EmojiButton"
+                                            Content="☺"
+                                            Style="{StaticResource IconButtonStyle}"
+                                            Click="EmojiButton_Click"
+                                            TabIndex="6"
+                                            AutomationProperties.Name="Mở bộ chọn emoji"
+                                            ToolTip="Chèn emoji" />
+                                    <Button x:Name="SendButton"
+                                            Content="Gửi"
+                                            Style="{StaticResource PrimaryButtonStyle}"
+                                            Height="38"
+                                            MinWidth="76"
+                                            Margin="5,0,0,0"
+                                            Click="SendButton_Click"
+                                            TabIndex="7"
+                                            AutomationProperties.Name="Gửi tin nhắn"
+                                            ToolTip="Gửi tin nhắn (Enter)" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid Grid.Row="2" Margin="0,5,2,0">
+                                <TextBlock Text="Enter gửi • Shift+Enter xuống dòng"
+                                           FontSize="10"
+                                           Foreground="{StaticResource MutedInkBrush}" />
+                                <TextBlock x:Name="CharacterCountText"
+                                           Text="0 / 2000"
+                                           HorizontalAlignment="Right"
+                                           FontSize="10"
+                                           Foreground="{StaticResource MutedInkBrush}" />
+                            </Grid>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Background="#EAF0F6" Padding="24,0">
+            <TextBlock x:Name="FooterStatusText"
+                       Text="Sẵn sàng • Lab1 Chat"
+                       FontSize="11"
+                       Foreground="{StaticResource MutedInkBrush}"
+                       VerticalAlignment="Center" />
+        </Border>
+
+        <Popup x:Name="EmojiPopup"
+               PlacementTarget="{Binding ElementName=EmojiButton}"
+               Placement="Top"
+               HorizontalOffset="-163"
+               VerticalOffset="-7"
+               StaysOpen="False"
+               AllowsTransparency="True"
+               PopupAnimation="Fade">
+            <Border Background="White"
+                    BorderBrush="#DCE4EE"
+                    BorderThickness="1"
+                    CornerRadius="12"
+                    Padding="10">
+                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                    <WrapPanel x:Name="EmojiPanel" Width="245" />
+                </ScrollViewer>
+            </Border>
+        </Popup>
+    </Grid>
+</Window>

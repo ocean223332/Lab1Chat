@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Chat.Server</AssemblyName>
+    <RootNamespace>Chat.Server</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Chat.Shared\Chat.Shared.csproj" />
+  </ItemGroup>
+</Project>

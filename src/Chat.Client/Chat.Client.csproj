@@ -13,5 +13,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Chat.Shared\Chat.Shared.csproj" />
+    <EmbeddedResource Include="Assets\Twemoji\*.png" />
+    <None Update="Assets\Twemoji\LICENSE-GRAPHICS" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Assets\Twemoji\TWEMOJI-NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

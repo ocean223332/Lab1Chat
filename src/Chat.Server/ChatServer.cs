@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Channels;
 using Chat.Shared;
@@ -16,8 +17,11 @@ public sealed class ChatServer : IAsyncDisposable
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan WriteTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan TransferIdleTimeout = TimeSpan.FromSeconds(30);
     private const int OutboundQueueCapacity = 64;
     private const int MaxBusyRejections = 8;
+    private const int MaxConcurrentTransfers = 4;
+    private const long MaxTemporaryStorageBytes = 8L * 1024 * 1024 * 1024;
 
     private readonly IPAddress _address;
     private readonly int _port;
@@ -27,9 +31,13 @@ public sealed class ChatServer : IAsyncDisposable
     private readonly List<ClientSession> _members = new();
     private readonly Dictionary<string, ClientSession> _membersByUsername =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ClientSession> _membersByTransferToken =
+        new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _roomEvents = new(1, 1);
     private readonly SemaphoreSlim _connectionSlots =
-        new(ChatLimits.MaxUsers, ChatLimits.MaxUsers);
+        new(ChatLimits.MaxUsers + MaxConcurrentTransfers, ChatLimits.MaxUsers + MaxConcurrentTransfers);
+    private readonly SemaphoreSlim _transferSlots =
+        new(MaxConcurrentTransfers, MaxConcurrentTransfers);
     private readonly SemaphoreSlim _busyRejectionSlots =
         new(MaxBusyRejections, MaxBusyRejections);
     private readonly ConcurrentDictionary<int, Task> _handlers = new();
@@ -37,6 +45,7 @@ public sealed class ChatServer : IAsyncDisposable
     private readonly TaskCompletionSource _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ConcurrentDictionary<int, Task> _busyRejections = new();
+    private readonly AttachmentStore _attachmentStore;
 
     private TcpListener? _listener;
     private int _started;
@@ -55,6 +64,7 @@ public sealed class ChatServer : IAsyncDisposable
         _port = port;
         _boundPort = port;
         _log = log;
+        _attachmentStore = new AttachmentStore(MaxTemporaryStorageBytes);
     }
 
     public IPAddress Address => _address;
@@ -161,6 +171,7 @@ public sealed class ChatServer : IAsyncDisposable
             if (listener is not null && !ReferenceEquals(listener, listenerToStop))
                 StopListener(listener);
             await WaitForHandlersAsync().ConfigureAwait(false);
+            await _attachmentStore.DisposeAsync().ConfigureAwait(false);
             _completion.TrySetResult();
             Log("Máy chủ đã dừng.");
         }
@@ -177,8 +188,10 @@ public sealed class ChatServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync().ConfigureAwait(false);
+        await _attachmentStore.DisposeAsync().ConfigureAwait(false);
         _roomEvents.Dispose();
         _connectionSlots.Dispose();
+        _transferSlots.Dispose();
         _busyRejectionSlots.Dispose();
         _stopCts.Dispose();
     }
@@ -213,16 +226,21 @@ public sealed class ChatServer : IAsyncDisposable
     private void StartClientHandler(TcpClient client, CancellationToken serverToken)
     {
         var id = Interlocked.Increment(ref _nextHandlerId);
-        var task = HandleClientWithSlotAsync(client, serverToken);
-        _handlers[id] = task;
-        _ = RemoveCompletedHandlerAsync(id, task);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _handlers[id] = completion.Task;
+        _ = ExecuteClientHandlerAsync(id, client, serverToken, completion);
     }
 
-    private async Task RemoveCompletedHandlerAsync(int id, Task handler)
+    private async Task ExecuteClientHandlerAsync(
+        int id,
+        TcpClient client,
+        CancellationToken serverToken,
+        TaskCompletionSource completion)
     {
         try
         {
-            await handler.ConfigureAwait(false);
+            await HandleClientWithSlotAsync(client, serverToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -232,6 +250,7 @@ public sealed class ChatServer : IAsyncDisposable
         }
         finally
         {
+            completion.TrySetResult();
             _handlers.TryRemove(id, out _);
         }
     }
@@ -261,16 +280,21 @@ public sealed class ChatServer : IAsyncDisposable
         }
 
         var id = Interlocked.Increment(ref _nextRejectionId);
-        var task = RejectBusyClientAsync(client, serverToken);
-        _busyRejections[id] = task;
-        _ = RemoveCompletedRejectionAsync(id, task);
+        var completion = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _busyRejections[id] = completion.Task;
+        _ = ExecuteBusyRejectionAsync(id, client, serverToken, completion);
     }
 
-    private async Task RemoveCompletedRejectionAsync(int id, Task rejection)
+    private async Task ExecuteBusyRejectionAsync(
+        int id,
+        TcpClient client,
+        CancellationToken serverToken,
+        TaskCompletionSource completion)
     {
         try
         {
-            await rejection.ConfigureAwait(false);
+            await RejectBusyClientAsync(client, serverToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -278,6 +302,7 @@ public sealed class ChatServer : IAsyncDisposable
         }
         finally
         {
+            completion.TrySetResult();
             _busyRejections.TryRemove(id, out _);
         }
     }
@@ -336,6 +361,13 @@ public sealed class ChatServer : IAsyncDisposable
             var firstPacket = await ReadJoinPacketAsync(session, serverToken).ConfigureAwait(false);
             if (firstPacket is null)
                 return;
+
+            if (firstPacket.Type is PacketTypes.FileUpload or PacketTypes.FileDownload)
+            {
+                await HandleTransferSessionAsync(connection, firstPacket, serverToken)
+                    .ConfigureAwait(false);
+                return;
+            }
 
             if (!string.Equals(firstPacket.Type, PacketTypes.Join, StringComparison.Ordinal))
             {
@@ -440,6 +472,494 @@ public sealed class ChatServer : IAsyncDisposable
         }
     }
 
+    private async Task HandleTransferSessionAsync(
+        JsonLineConnection connection,
+        ChatPacket firstPacket,
+        CancellationToken serverToken)
+    {
+        if (!TryGetMemberByTransferToken(firstPacket.TransferToken, out var owner))
+        {
+            await TryWriteDirectAsync(
+                connection,
+                CreateError("Phiên chuyển tệp không hợp lệ hoặc đã hết hạn."),
+                serverToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!_transferSlots.Wait(0))
+        {
+            await TryWriteDirectAsync(
+                connection,
+                CreateError("Máy chủ đang xử lý quá nhiều tệp; hãy thử lại sau."),
+                serverToken).ConfigureAwait(false);
+            return;
+        }
+
+        using var transferCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            serverToken, owner.StopToken);
+        var transferToken = transferCancellation.Token;
+
+        try
+        {
+            if (firstPacket.Type == PacketTypes.FileUpload)
+            {
+                await HandleUploadAsync(connection, owner, firstPacket, transferToken)
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                await HandleDownloadAsync(connection, owner, firstPacket, transferToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (transferToken.IsCancellationRequested)
+        {
+            // The room member disconnected or the server is shutting down.
+        }
+        catch (TransferTimeoutException exception)
+        {
+            await TryWriteTransferErrorAsync(connection, exception.Message, transferToken)
+                .ConfigureAwait(false);
+        }
+        catch (TransferProtocolException exception)
+        {
+            await TryWriteTransferErrorAsync(connection, exception.Message, transferToken)
+                .ConfigureAwait(false);
+        }
+        catch (JsonException)
+        {
+            await TryWriteTransferErrorAsync(connection, "Gói tin chuyển tệp không hợp lệ.", transferToken)
+                .ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            await TryWriteTransferErrorAsync(connection, "Không thể đọc hoặc ghi tệp.", transferToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _transferSlots.Release();
+        }
+    }
+
+    private async Task HandleUploadAsync(
+        JsonLineConnection connection,
+        ClientSession owner,
+        ChatPacket request,
+        CancellationToken transferToken)
+    {
+        if (!TryValidateUploadRequest(request, out var fileName, out var validationError))
+            throw new TransferProtocolException(validationError);
+
+        if (!_attachmentStore.TryReserve(
+                fileName,
+                request.FileSize,
+                request.IsImage,
+                out var reservation,
+                out var reserveError)
+            || reservation is null)
+        {
+            throw new TransferProtocolException(reserveError);
+        }
+
+        string? committedAttachmentId = null;
+        try
+        {
+            string? expectedHash = null;
+            var ready = new ChatPacket
+            {
+                Type = PacketTypes.FileReady,
+                AttachmentId = reservation.AttachmentId,
+                FileName = reservation.FileName,
+                FileSize = reservation.FileSize,
+                IsImage = reservation.IsImage,
+                Offset = 0,
+                Timestamp = DateTimeOffset.UtcNow
+            };
+
+            await using (var output = new FileStream(
+                reservation.TemporaryPath,
+                new FileStreamOptions
+                {
+                    Mode = FileMode.CreateNew,
+                    Access = FileAccess.Write,
+                    Share = FileShare.None,
+                    BufferSize = ChatLimits.FileChunkBytes * 2,
+                    Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+                }))
+            {
+                await WriteTransferPacketAsync(connection, ready, transferToken)
+                    .ConfigureAwait(false);
+
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                var imagePrefix = new byte[8];
+                var imagePrefixLength = 0;
+                long received = 0;
+
+                while (true)
+                {
+                    var packet = await ReadTransferPacketAsync(connection, transferToken)
+                        .ConfigureAwait(false);
+                    if (packet is null)
+                        throw new TransferProtocolException("Kết nối chuyển tệp đã đóng trước khi hoàn tất.");
+
+                    if (packet.Type == PacketTypes.FileChunk)
+                    {
+                        var data = packet.Data;
+                        if (data is null || data.Length == 0 || data.Length > ChatLimits.FileChunkBytes)
+                            throw new TransferProtocolException("Kích thước mảnh tệp không hợp lệ.");
+                        if (packet.AttachmentId is not null
+                            && !string.Equals(packet.AttachmentId, reservation.AttachmentId, StringComparison.Ordinal))
+                            throw new TransferProtocolException("Mã tệp không khớp.");
+                        if (packet.Offset != received)
+                            throw new TransferProtocolException("Offset mảnh tệp không liên tục.");
+                        if (received > reservation.FileSize - data.Length)
+                            throw new TransferProtocolException("Dữ liệu tải lên vượt quá kích thước đã khai báo.");
+
+                        await output.WriteAsync(data.AsMemory(), transferToken).ConfigureAwait(false);
+                        hash.AppendData(data);
+                        if (imagePrefixLength < imagePrefix.Length)
+                        {
+                            var copyLength = Math.Min(imagePrefix.Length - imagePrefixLength, data.Length);
+                            data.AsSpan(0, copyLength).CopyTo(imagePrefix.AsSpan(imagePrefixLength));
+                            imagePrefixLength += copyLength;
+                        }
+
+                        received += data.Length;
+                        continue;
+                    }
+
+                    if (packet.Type != PacketTypes.FileComplete)
+                        throw new TransferProtocolException("Gói tin chuyển tệp không được hỗ trợ.");
+                    if (packet.AttachmentId is not null
+                        && !string.Equals(packet.AttachmentId, reservation.AttachmentId, StringComparison.Ordinal))
+                        throw new TransferProtocolException("Mã tệp không khớp.");
+                    if (received != reservation.FileSize)
+                        throw new TransferProtocolException("Tệp tải lên chưa đủ dữ liệu.");
+                    if (packet.FileSize != reservation.FileSize)
+                        throw new TransferProtocolException("Kích thước tệp hoàn tất không khớp.");
+                    if (!TryParseSha256(packet.Sha256, out var suppliedHash))
+                        throw new TransferProtocolException("SHA-256 của tệp không hợp lệ.");
+
+                    var actualHash = hash.GetHashAndReset();
+                    if (!CryptographicOperations.FixedTimeEquals(actualHash, suppliedHash))
+                        throw new TransferProtocolException("SHA-256 của tệp không khớp.");
+                    expectedHash = Convert.ToHexString(actualHash);
+
+                    if (reservation.IsImage
+                        && !HasSupportedImageSignature(imagePrefix, imagePrefixLength))
+                        throw new TransferProtocolException("Ảnh phải là PNG, JPG hoặc JPEG hợp lệ.");
+
+                    await output.FlushAsync(transferToken).ConfigureAwait(false);
+                    break;
+                }
+            }
+
+            if (expectedHash is null)
+                throw new TransferProtocolException("Tệp tải lên chưa hoàn tất.");
+
+            var committed = _attachmentStore.Commit(reservation, expectedHash);
+            committedAttachmentId = committed.AttachmentId;
+            var complete = new ChatPacket
+            {
+                Type = PacketTypes.FileComplete,
+                AttachmentId = committed.AttachmentId,
+                FileName = committed.FileName,
+                FileSize = committed.FileSize,
+                Sha256 = committed.Sha256,
+                IsImage = committed.IsImage,
+                Timestamp = DateTimeOffset.UtcNow
+            };
+            await WriteTransferPacketAsync(connection, complete, transferToken)
+                .ConfigureAwait(false);
+
+            await BroadcastAttachmentAsync(owner, committed, transferToken)
+                .ConfigureAwait(false);
+            committedAttachmentId = null;
+        }
+        finally
+        {
+            if (committedAttachmentId is not null)
+                _attachmentStore.Remove(committedAttachmentId);
+            _attachmentStore.Release(reservation);
+        }
+    }
+
+    private async Task HandleDownloadAsync(
+        JsonLineConnection connection,
+        ClientSession owner,
+        ChatPacket request,
+        CancellationToken transferToken)
+    {
+        if (!_attachmentStore.TryGet(request.AttachmentId ?? string.Empty, out var attachment)
+            || attachment is null)
+            throw new TransferProtocolException("Không tìm thấy tệp đính kèm.");
+
+        var ready = new ChatPacket
+        {
+            Type = PacketTypes.FileReady,
+            AttachmentId = attachment.AttachmentId,
+            FileName = attachment.FileName,
+            FileSize = attachment.FileSize,
+            Sha256 = attachment.Sha256,
+            IsImage = attachment.IsImage,
+            Offset = 0,
+            Timestamp = DateTimeOffset.UtcNow
+        };
+        await WriteTransferPacketAsync(connection, ready, transferToken).ConfigureAwait(false);
+
+        long offset = 0;
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        await using var input = new FileStream(
+            attachment.FilePath,
+            new FileStreamOptions
+            {
+                Mode = FileMode.Open,
+                Access = FileAccess.Read,
+                Share = FileShare.Read,
+                BufferSize = ChatLimits.FileChunkBytes * 2,
+                Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+            });
+        var buffer = new byte[ChatLimits.FileChunkBytes];
+
+        while (true)
+        {
+            var count = await input.ReadAsync(buffer.AsMemory(), transferToken)
+                .ConfigureAwait(false);
+            if (count == 0)
+                break;
+            if (offset > attachment.FileSize - count)
+                throw new TransferProtocolException("Tệp lưu trên máy chủ đã thay đổi.");
+
+            var data = buffer.AsSpan(0, count).ToArray();
+            hash.AppendData(data);
+            await WriteTransferPacketAsync(connection, new ChatPacket
+            {
+                Type = PacketTypes.FileChunk,
+                AttachmentId = attachment.AttachmentId,
+                FileSize = attachment.FileSize,
+                Offset = offset,
+                Data = data,
+                Timestamp = DateTimeOffset.UtcNow
+            }, transferToken).ConfigureAwait(false);
+            offset += count;
+        }
+
+        if (offset != attachment.FileSize)
+            throw new TransferProtocolException("Tệp lưu trên máy chủ chưa đủ dữ liệu.");
+
+        var actualHash = Convert.ToHexString(hash.GetHashAndReset());
+        if (!string.Equals(actualHash, attachment.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new TransferProtocolException("SHA-256 của tệp lưu trên máy chủ không khớp.");
+
+        await WriteTransferPacketAsync(connection, new ChatPacket
+        {
+            Type = PacketTypes.FileComplete,
+            AttachmentId = attachment.AttachmentId,
+            FileName = attachment.FileName,
+            FileSize = attachment.FileSize,
+            Sha256 = attachment.Sha256,
+            IsImage = attachment.IsImage,
+            Offset = offset,
+            Timestamp = DateTimeOffset.UtcNow
+        }, transferToken).ConfigureAwait(false);
+    }
+
+    private async Task BroadcastAttachmentAsync(
+        ClientSession owner,
+        StoredAttachment attachment,
+        CancellationToken transferToken)
+    {
+        await _roomEvents.WaitAsync(transferToken).ConfigureAwait(false);
+        try
+        {
+            if (transferToken.IsCancellationRequested || IsStopping)
+                return;
+
+            // Build a fresh metadata-only packet. In particular, never copy
+            // TransferToken or Data from a transfer request into the room.
+            var announcement = new ChatPacket
+            {
+                Type = PacketTypes.Attachment,
+                Username = owner.Username,
+                AttachmentId = attachment.AttachmentId,
+                FileName = attachment.FileName,
+                FileSize = attachment.FileSize,
+                Sha256 = attachment.Sha256,
+                IsImage = attachment.IsImage,
+                Timestamp = DateTimeOffset.UtcNow
+            };
+            foreach (var recipient in SnapshotMembers())
+                QueueOrStop(recipient, announcement);
+        }
+        finally
+        {
+            _roomEvents.Release();
+        }
+    }
+
+    private bool TryGetMemberByTransferToken(
+        string? transferToken,
+        out ClientSession member)
+    {
+        member = null!;
+        if (string.IsNullOrWhiteSpace(transferToken))
+            return false;
+
+        lock (_membersLock)
+        {
+            if (!_membersByTransferToken.TryGetValue(transferToken, out var candidate)
+                || !candidate.IsJoined
+                || candidate.IsClosing)
+                return false;
+            member = candidate;
+            return true;
+        }
+    }
+
+    private static string CreateTransferToken()
+    {
+        Span<byte> bytes = stackalloc byte[32];
+        RandomNumberGenerator.Fill(bytes);
+        return Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static bool TryValidateUploadRequest(
+        ChatPacket request,
+        out string fileName,
+        out string error)
+    {
+        fileName = request.FileName ?? string.Empty;
+        error = string.Empty;
+        if (fileName.Length == 0 || string.IsNullOrWhiteSpace(fileName) || fileName is "." or "..")
+        {
+            error = "Tên tệp không hợp lệ.";
+            return false;
+        }
+        if (fileName.Length > 255
+            || fileName.IndexOfAny(['/', '\\', ':']) >= 0
+            || fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+            || fileName.Any(char.IsControl)
+            || !string.Equals(Path.GetFileName(fileName), fileName, StringComparison.Ordinal))
+        {
+            error = "Tên tệp không hợp lệ.";
+            return false;
+        }
+        if (request.FileSize < 0 || request.FileSize > ChatLimits.MaxFileSize)
+        {
+            error = $"Tệp không được vượt quá {ChatLimits.MaxFileSize / (1024 * 1024 * 1024)} GiB.";
+            return false;
+        }
+        if (request.IsImage)
+        {
+            if (request.FileSize > ChatLimits.MaxImageFileSize)
+            {
+                error = "Ảnh không được vượt quá 20 MiB.";
+                return false;
+            }
+
+            var extension = Path.GetExtension(fileName);
+            if (!extension.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                && !extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase))
+            {
+                error = "Ảnh phải có phần mở rộng PNG, JPG hoặc JPEG.";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryParseSha256(string? value, out byte[] hash)
+    {
+        hash = [];
+        if (string.IsNullOrWhiteSpace(value) || value.Length != 64)
+            return false;
+
+        try
+        {
+            hash = Convert.FromHexString(value);
+            return hash.Length == 32;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasSupportedImageSignature(byte[] prefix, int count)
+    {
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        if (count >= png.Length && prefix.AsSpan(0, png.Length).SequenceEqual(png))
+            return true;
+        return count >= 3 && prefix[0] == 0xFF && prefix[1] == 0xD8 && prefix[2] == 0xFF;
+    }
+
+    private static async Task<ChatPacket?> ReadTransferPacketAsync(
+        JsonLineConnection connection,
+        CancellationToken transferToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(transferToken);
+        timeout.CancelAfter(TransferIdleTimeout);
+        try
+        {
+            return await connection.ReadAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!transferToken.IsCancellationRequested)
+        {
+            throw new TransferTimeoutException("Kết nối chuyển tệp không hoạt động quá lâu.");
+        }
+    }
+
+    private static async Task WriteTransferPacketAsync(
+        JsonLineConnection connection,
+        ChatPacket packet,
+        CancellationToken transferToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(transferToken);
+        timeout.CancelAfter(TransferIdleTimeout);
+        try
+        {
+            await connection.WriteAsync(packet, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!transferToken.IsCancellationRequested)
+        {
+            throw new TransferTimeoutException("Kết nối chuyển tệp không nhận dữ liệu đủ nhanh.");
+        }
+    }
+
+    private static async Task TryWriteTransferErrorAsync(
+        JsonLineConnection connection,
+        string message,
+        CancellationToken transferToken)
+    {
+        try
+        {
+            await WriteTransferPacketAsync(connection, CreateError(message), transferToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Origin member/server stopped.
+        }
+        catch (TransferTimeoutException)
+        {
+            // The transfer peer is not reading its error response.
+        }
+        catch (IOException)
+        {
+            // The transfer peer disconnected.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The transfer peer disconnected.
+        }
+    }
+
     /// <summary>
     /// Adds a member and enqueues Welcome, UserList, and the join notice while
     /// holding the room event gate. Queueing is non-blocking and preserves order
@@ -465,9 +985,10 @@ public sealed class ChatServer : IAsyncDisposable
                     error = "Phòng chat đã đủ số thành viên.";
                 else
                 {
-                    session.SetUsername(username);
+                    session.SetIdentity(username, CreateTransferToken());
                     _members.Add(session);
                     _membersByUsername.Add(username, session);
+                    _membersByTransferToken.Add(session.TransferToken, session);
                 }
             }
 
@@ -480,6 +1001,7 @@ public sealed class ChatServer : IAsyncDisposable
                 Type = PacketTypes.Welcome,
                 Username = username,
                 Text = "Chào mừng bạn đến phòng chat.",
+                TransferToken = session.TransferToken,
                 Timestamp = DateTimeOffset.UtcNow
             }))
             {
@@ -666,6 +1188,7 @@ public sealed class ChatServer : IAsyncDisposable
         {
             _members.Remove(session);
             _membersByUsername.Remove(session.Username);
+            _membersByTransferToken.Remove(session.TransferToken);
         }
 
         return true;
@@ -753,6 +1276,10 @@ public sealed class ChatServer : IAsyncDisposable
         }
     }
 
+    private sealed class TransferProtocolException(string message) : Exception(message);
+
+    private sealed class TransferTimeoutException(string message) : Exception(message);
+
     private sealed class ClientSession
     {
         private readonly TcpClient _client;
@@ -787,11 +1314,14 @@ public sealed class ChatServer : IAsyncDisposable
         public JsonLineConnection Connection => _connection;
         public CancellationToken StopToken => _stopCts.Token;
         public string Username { get; private set; } = string.Empty;
+        public string TransferToken { get; private set; } = string.Empty;
         public bool IsJoined => Volatile.Read(ref _joined) != 0;
+        public bool IsClosing => Volatile.Read(ref _closing) != 0;
 
-        public void SetUsername(string username)
+        public void SetIdentity(string username, string transferToken)
         {
             Username = username;
+            TransferToken = transferToken;
             Volatile.Write(ref _joined, 1);
         }
 

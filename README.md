@@ -1,12 +1,14 @@
-# Lab 1 — Ứng dụng chat TCP: Console Server + WPF Client
+# Lab 2 — Mở rộng Lab 1: chat, emoji màu, ảnh và file lớn
 
-Ứng dụng C# cho nhiều thành viên cùng tham gia một phòng chat. Server là Console App; client là WPF App trên Windows. Không sử dụng thư viện NuGet bên ngoài.
+Ứng dụng C# cho nhiều thành viên cùng tham gia một phòng chat. Server là Console App; client là WPF App trên Windows. Giữ tên solution `Lab1Chat.sln` để tiếp tục dự án Lab 1. Xem [hướng dẫn Lab 2](LAB2.md) để chạy demo gửi ảnh/file lớn và giải thích Async/Parallel Programming.
 
 ## Chức năng
 
 - Kết nối server bằng IP/hostname, port và tên thành viên.
 - Nhắn tin chung theo thời gian thực; hỗ trợ tiếng Việt, emoji và tin nhắn nhiều dòng.
 - Bảng chọn emoji; Enter để gửi, Shift+Enter để xuống dòng.
+- Emoji màu được đóng gói cùng client; gửi ảnh PNG/JPEG có preview trong cửa sổ chat.
+- Gửi/tải file theo từng phần, tối đa 2 GiB/file, có tiến độ, hủy và kiểm tra SHA-256.
 - Hiển thị danh sách thành viên online, thời gian tin nhắn, thông báo vào/rời phòng.
 - Phân biệt tin nhắn của bản thân, người khác và hệ thống.
 - Từ chối tên trùng (không phân biệt chữ hoa/thường), tên không hợp lệ, tin nhắn trống/quá dài.
@@ -86,7 +88,7 @@ Ví dụ hai gói client gửi, mỗi JSON trên một dòng:
 {"type":"chat","text":"Xin chào mọi người 👋"}
 ```
 
-Server không tin trường tên người gửi do client tự khai trong gói `chat`: tên được lấy từ phiên đã tham gia. Emoji là chuỗi Unicode, không cần giao thức riêng. WPF có thể hiển thị emoji màu hoặc đơn sắc tùy font/hệ thống.
+Server không tin trường tên người gửi do client tự khai trong gói `chat`: tên được lấy từ phiên đã tham gia. Emoji vẫn là chuỗi Unicode trên đường truyền; bộ emoji tích hợp được client vẽ bằng ảnh màu. Emoji ngoài bộ tích hợp dùng font hệ thống.
 
 Giới hạn mặc định: 100 thành viên, tên 24 đơn vị ký tự UTF-16, tin nhắn 2.000 đơn vị ký tự UTF-16, gói JSON 65.536 byte. Một emoji có thể chiếm nhiều đơn vị UTF-16. Các giới hạn nằm trong `Chat.Shared/ChatPacket.cs`.
 
@@ -104,4 +106,4 @@ Kiểm tra thủ công thêm: mở hai client với hai tên khác nhau; gửi t
 
 ## Phạm vi bài lab
 
-Đây là **chat phòng chung trong mạng tin cậy**, không phải dịch vụ chat production. Chưa có đăng nhập/mật khẩu, TLS, lưu lịch sử, gửi file, chat riêng hoặc nhiều phòng. Tên thành viên chỉ dùng nhận diện trong phiên, không phải xác thực danh tính. Tin nhắn chỉ được gửi cho thành viên đang online; không lưu lại khi server tắt. Không mở port ứng dụng trực tiếp ra Internet.
+Đây là **chat phòng chung trong mạng tin cậy**, không phải dịch vụ chat production. Chưa có đăng nhập/mật khẩu, TLS, lưu lịch sử, chat riêng hoặc nhiều phòng. Tên thành viên chỉ dùng nhận diện trong phiên, không phải xác thực danh tính. Tin nhắn chỉ được gửi cho thành viên đang online; file lưu tạm trong phiên server. Không mở port ứng dụng trực tiếp ra Internet. Token truyền file chỉ gắn với phiên chat, không thay thế TLS hoặc xác thực tài khoản. Không mở file thực thi từ người gửi không tin cậy.

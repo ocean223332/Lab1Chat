@@ -17,14 +17,26 @@ public sealed class ChatClientSession : IAsyncDisposable
     private int _disposed;
     private int _leaveSent;
 
-    private ChatClientSession(TcpClient tcpClient, JsonLineConnection connection, string username)
+    private ChatClientSession(
+        TcpClient tcpClient,
+        JsonLineConnection connection,
+        string host,
+        int port,
+        string username,
+        string transferToken)
     {
         _tcpClient = tcpClient;
         _connection = connection;
+        Host = host;
+        Port = port;
         Username = username;
+        TransferToken = transferToken;
     }
 
+    public string Host { get; }
+    public int Port { get; }
     public string Username { get; }
+    public string TransferToken { get; }
 
     public static async Task<ChatClientSession> ConnectAsync(
         string host,
@@ -65,7 +77,13 @@ public sealed class ChatClientSession : IAsyncDisposable
             var acceptedName = string.IsNullOrWhiteSpace(firstPacket.Username)
                 ? username
                 : firstPacket.Username.Trim();
-            return new ChatClientSession(tcpClient, connection, acceptedName);
+            return new ChatClientSession(
+                tcpClient,
+                connection,
+                host,
+                port,
+                acceptedName,
+                firstPacket.TransferToken ?? string.Empty);
         }
         catch
         {
@@ -88,6 +106,33 @@ public sealed class ChatClientSession : IAsyncDisposable
                 Text = text,
                 Timestamp = DateTimeOffset.UtcNow
             }, cancellationToken);
+
+    public Task<ChatPacket> UploadAttachmentAsync(
+        string filePath,
+        IProgress<TransferProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureTransferToken();
+        return AttachmentTransferClient.UploadAsync(
+            Host, Port, TransferToken, filePath, progress, cancellationToken);
+    }
+
+    public Task DownloadAttachmentAsync(
+        ChatPacket attachment,
+        string destinationPath,
+        IProgress<TransferProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureTransferToken();
+        return AttachmentTransferClient.DownloadAsync(
+            Host, Port, TransferToken, attachment, destinationPath, progress, cancellationToken);
+    }
+
+    private void EnsureTransferToken()
+    {
+        if (string.IsNullOrWhiteSpace(TransferToken))
+            throw new InvalidOperationException("Server chưa cấp token truyền tệp cho phiên chat.");
+    }
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {

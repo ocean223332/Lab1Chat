@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Chat.Client"
-        Title="Lab1 Chat • WPF Client"
+        Title="Lab2 Chat • WPF Client"
         Width="1120"
         Height="760"
         MinWidth="920"
@@ -13,6 +13,7 @@
         Foreground="{StaticResource InkBrush}"
         UseLayoutRounding="True"
         SnapsToDevicePixels="True"
+        Loaded="Window_Loaded"
         Closing="Window_Closing">
     <Window.Resources>
         <DataTemplate x:Key="OwnMessageTemplate">
@@ -28,11 +29,11 @@
                                    FontWeight="SemiBold"
                                    Foreground="#A7E6E3"
                                    Margin="0,0,0,4" />
-                        <TextBlock Text="{Binding Text}"
-                                   FontSize="14"
-                                   LineHeight="20"
-                                   TextWrapping="Wrap"
-                                   Foreground="White" />
+                        <local:EmojiTextBlock EmojiText="{Binding Text}"
+                                              FontSize="14"
+                                              LineHeight="20"
+                                              TextWrapping="Wrap"
+                                              Foreground="White" />
                         <TextBlock Text="{Binding TimeText}"
                                    FontSize="10"
                                    HorizontalAlignment="Right"
@@ -56,11 +57,11 @@
                                    FontWeight="SemiBold"
                                    Foreground="{StaticResource TealDarkBrush}"
                                    Margin="0,0,0,4" />
-                        <TextBlock Text="{Binding Text}"
-                                   FontSize="14"
-                                   LineHeight="20"
-                                   TextWrapping="Wrap"
-                                   Foreground="{StaticResource InkBrush}" />
+                        <local:EmojiTextBlock EmojiText="{Binding Text}"
+                                              FontSize="14"
+                                              LineHeight="20"
+                                              TextWrapping="Wrap"
+                                              Foreground="{StaticResource InkBrush}" />
                         <TextBlock Text="{Binding TimeText}"
                                    FontSize="10"
                                    HorizontalAlignment="Right"
@@ -74,11 +75,11 @@
         <DataTemplate x:Key="SystemMessageTemplate">
             <Grid Margin="0,8,0,8">
                 <StackPanel HorizontalAlignment="Center" MaxWidth="670">
-                    <TextBlock Text="{Binding Text}"
-                               FontSize="12"
-                               TextWrapping="Wrap"
-                               TextAlignment="Center"
-                               Foreground="{StaticResource MutedInkBrush}" />
+                    <local:EmojiTextBlock EmojiText="{Binding Text}"
+                                          FontSize="12"
+                                          TextWrapping="Wrap"
+                                          TextAlignment="Center"
+                                          Foreground="{StaticResource MutedInkBrush}" />
                     <TextBlock Text="{Binding TimeText}"
                                FontSize="10"
                                TextAlignment="Center"
@@ -88,10 +89,105 @@
             </Grid>
         </DataTemplate>
 
+        <DataTemplate x:Key="AttachmentTemplate">
+            <Grid Margin="0,4,0,4">
+                <Border HorizontalAlignment="{Binding BubbleAlignment}"
+                        MaxWidth="385"
+                        Padding="13,10,13,10"
+                        Background="{Binding AttachmentBackground}"
+                        CornerRadius="14">
+                    <StackPanel>
+                        <TextBlock Text="{Binding SenderText}"
+                                   FontSize="11"
+                                   FontWeight="SemiBold"
+                                   Foreground="{Binding AttachmentForeground}"
+                                   Margin="0,0,0,7" />
+                        <Border Background="#22000000"
+                                CornerRadius="10"
+                                Padding="5"
+                                Visibility="{Binding Attachment.PreviewVisibility}">
+                            <Image Source="{Binding Attachment.Preview}"
+                                   MaxWidth="350"
+                                   MaxHeight="245"
+                                   Stretch="Uniform"
+                                   SnapsToDevicePixels="True" />
+                        </Border>
+                        <Grid Margin="0,9,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="42" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0"
+                                    Width="36"
+                                    Height="36"
+                                    CornerRadius="9"
+                                    Background="#2AFFFFFF"
+                                    VerticalAlignment="Top">
+                                <TextBlock Text="📎"
+                                           FontSize="18"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="9,0,0,0">
+                                <TextBlock Text="{Binding Attachment.FileName}"
+                                           FontWeight="SemiBold"
+                                           Foreground="{Binding AttachmentForeground}"
+                                           TextWrapping="Wrap"
+                                           MaxWidth="300" />
+                                <TextBlock Text="{Binding Attachment.SizeText}"
+                                           FontSize="11"
+                                           Foreground="{Binding AttachmentForeground}"
+                                           Opacity="0.72"
+                                           Margin="0,3,0,0" />
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="{Binding Attachment.ProgressText}"
+                                   FontSize="11"
+                                   Foreground="{Binding AttachmentForeground}"
+                                   Opacity="0.82"
+                                   Margin="0,8,0,0"
+                                   Visibility="{Binding Attachment.TransferProgressVisibility}" />
+                        <TextBlock Text="{Binding Attachment.ErrorText}"
+                                   FontSize="11"
+                                   Foreground="#FFB8C2"
+                                   TextWrapping="Wrap"
+                                   Margin="0,7,0,0"
+                                   Visibility="{Binding Attachment.ErrorVisibility}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,9,0,0">
+                            <Button Content="Lưu tệp"
+                                    Tag="{Binding}"
+                                    Click="DownloadAttachment_Click"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Height="31"
+                                    Padding="10,0"
+                                    IsEnabled="{Binding Attachment.CanDownload}"
+                                    AutomationProperties.Name="Lưu tệp đính kèm" />
+                            <Button Content="Hủy"
+                                    Tag="{Binding}"
+                                    Click="CancelAttachmentDownload_Click"
+                                    Style="{StaticResource SecondaryButtonStyle}"
+                                    Height="31"
+                                    Padding="10,0"
+                                    Margin="7,0,0,0"
+                                    IsEnabled="{Binding Attachment.CanCancelDownload}"
+                                    AutomationProperties.Name="Hủy tải tệp đính kèm" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding TimeText}"
+                                   FontSize="10"
+                                   HorizontalAlignment="Right"
+                                   Foreground="{Binding AttachmentForeground}"
+                                   Opacity="0.68"
+                                   Margin="0,7,0,0" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </DataTemplate>
+
         <local:ChatMessageTemplateSelector x:Key="MessageTemplateSelector"
                                            OwnTemplate="{StaticResource OwnMessageTemplate}"
                                            OtherTemplate="{StaticResource OtherMessageTemplate}"
-                                           SystemTemplate="{StaticResource SystemMessageTemplate}" />
+                                           SystemTemplate="{StaticResource SystemMessageTemplate}"
+                                           AttachmentTemplate="{StaticResource AttachmentTemplate}" />
     </Window.Resources>
 
     <Grid Background="{StaticResource PageBrush}">
@@ -117,11 +213,11 @@
                                    Foreground="#7DE0DA" />
                     </Border>
                     <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="LAB1 CHAT"
+                        <TextBlock Text="LAB2 CHAT"
                                    FontSize="23"
                                    FontWeight="Bold"
                                    Foreground="White" />
-                        <TextBlock Text="WPF client • trò chuyện thời gian thực"
+                        <TextBlock Text="WPF client • chat, emoji, ảnh và file lớn"
                                    FontSize="12"
                                    Foreground="#AFC1D8"
                                    Margin="0,2,0,0" />
@@ -335,7 +431,7 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="65" />
                         <RowDefinition Height="*" />
-                        <RowDefinition Height="149" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
 
                     <Grid Grid.Row="0" Margin="22,0">
@@ -411,7 +507,8 @@
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
+                                <RowDefinition Height="84" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <TextBlock Grid.Row="0"
@@ -426,7 +523,7 @@
                                          VerticalContentAlignment="Top"
                                          VerticalScrollBarVisibility="Auto"
                                          HorizontalScrollBarVisibility="Disabled"
-                                         Padding="12,9,168,9"
+                                         Padding="12,9,230,9"
                                          FontSize="14"
                                          Foreground="{StaticResource InkBrush}"
                                          Background="#FAFBFD"
@@ -439,11 +536,25 @@
                                          AutomationProperties.Name="Nội dung tin nhắn"
                                          ToolTip="Enter để gửi • Shift+Enter để xuống dòng" />
                                 <StackPanel HorizontalAlignment="Right" VerticalAlignment="Bottom" Orientation="Horizontal" Margin="0,0,8,7">
+                                    <Button x:Name="ImageButton"
+                                            Content="▣"
+                                            Style="{StaticResource IconButtonStyle}"
+                                            Click="ImageButton_Click"
+                                            TabIndex="6"
+                                            AutomationProperties.Name="Gửi ảnh"
+                                            ToolTip="Gửi ảnh PNG/JPG/JPEG" />
+                                    <Button x:Name="FileButton"
+                                            Content="📎"
+                                            Style="{StaticResource IconButtonStyle}"
+                                            Click="FileButton_Click"
+                                            TabIndex="7"
+                                            AutomationProperties.Name="Gửi tệp"
+                                            ToolTip="Gửi tệp, tối đa 2 GiB" />
                                     <Button x:Name="EmojiButton"
                                             Content="☺"
                                             Style="{StaticResource IconButtonStyle}"
                                             Click="EmojiButton_Click"
-                                            TabIndex="6"
+                                            TabIndex="8"
                                             AutomationProperties.Name="Mở bộ chọn emoji"
                                             ToolTip="Chèn emoji" />
                                     <Button x:Name="SendButton"
@@ -453,12 +564,48 @@
                                             MinWidth="76"
                                             Margin="5,0,0,0"
                                             Click="SendButton_Click"
-                                            TabIndex="7"
+                                            TabIndex="9"
                                             AutomationProperties.Name="Gửi tin nhắn"
                                             ToolTip="Gửi tin nhắn (Enter)" />
                                 </StackPanel>
                             </Grid>
-                            <Grid Grid.Row="2" Margin="0,5,2,0">
+                            <Border Grid.Row="2"
+                                    x:Name="TransferStatusPanel"
+                                    Visibility="Collapsed"
+                                    Background="{StaticResource SoftTealBrush}"
+                                    CornerRadius="8"
+                                    Padding="9,6"
+                                    Margin="0,6,0,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock x:Name="TransferStatusText"
+                                                   Text="Đang chuẩn bị tệp..."
+                                                   TextTrimming="CharacterEllipsis"
+                                                   FontSize="11"
+                                                   Foreground="{StaticResource TealDarkBrush}" />
+                                        <ProgressBar x:Name="TransferProgressBar"
+                                                     Height="5"
+                                                     Minimum="0"
+                                                     Maximum="100"
+                                                     Margin="0,5,9,0"
+                                                     Foreground="{StaticResource TealBrush}" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            x:Name="TransferCancelButton"
+                                            Content="Hủy"
+                                            Click="TransferCancelButton_Click"
+                                            Style="{StaticResource SecondaryButtonStyle}"
+                                            Height="30"
+                                            Padding="10,0"
+                                            Margin="7,0,0,0"
+                                            AutomationProperties.Name="Hủy tải tệp" />
+                                </Grid>
+                            </Border>
+                            <Grid Grid.Row="3" Margin="0,5,2,0">
                                 <TextBlock Text="Enter gửi • Shift+Enter xuống dòng"
                                            FontSize="10"
                                            Foreground="{StaticResource MutedInkBrush}" />

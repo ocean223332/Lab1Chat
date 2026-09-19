@@ -5,6 +5,7 @@ using Chat.Shared;
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("UTF-8 / Vietnamese / emoji / multiline round trip", RoundTripAsync),
+    ("32 KiB binary file chunk fits the bounded JSON frame", FileChunkAsync),
     ("Several packets in one TCP read", CoalescedAsync),
     ("Fragmented packet, including split UTF-8 sequence", FragmentedAsync),
     ("Concurrent writes remain complete JSON frames", ConcurrentWritesAsync),
@@ -32,6 +33,23 @@ foreach (var (name, run) in tests)
 
 Console.WriteLine($"Protocol tests: {tests.Length - failures}/{tests.Length} passed.");
 return failures == 0 ? 0 : 1;
+
+static async Task FileChunkAsync()
+{
+    using var stream = new MemoryStream();
+    await using var connection = new JsonLineConnection(stream, leaveOpen: true);
+    var data = new byte[ChatLimits.FileChunkBytes];
+    System.Security.Cryptography.RandomNumberGenerator.Fill(data);
+    await connection.WriteAsync(new ChatPacket
+    {
+        Type = PacketTypes.FileChunk, Data = data, Offset = 512L * 1024 * 1024
+    });
+    Check(stream.Length <= ChatLimits.MaxFrameBytes + 1, "Encoded chunk must fit the protocol limit.");
+    stream.Position = 0;
+    var actual = await connection.ReadAsync();
+    Check(actual?.Offset == 512L * 1024 * 1024, "Large file offset corrupted.");
+    Check(actual?.Data is not null && data.SequenceEqual(actual.Data), "Binary payload corrupted.");
+}
 
 static async Task RoundTripAsync()
 {

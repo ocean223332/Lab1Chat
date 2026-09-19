@@ -1,0 +1,12 @@
+LAB2 Chat Client - bundled Twemoji graphics
+
+The colored emoji PNGs in this folder are from the official Twemoji project:
+https://github.com/jdecked/twemoji
+
+Twemoji graphics are licensed under the Creative Commons Attribution 4.0
+International license (CC BY 4.0). The complete license text is included in
+LICENSE-GRAPHICS in this folder. Project source and asset documentation:
+https://github.com/jdecked/twemoji/blob/master/LICENSE-GRAPHICS
+
+The client embeds these PNGs locally; it does not load emoji images from a
+network URL at runtime. Emoji characters remain Unicode text on the wire.
